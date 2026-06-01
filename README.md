@@ -31,7 +31,7 @@ cargo build --release
 
 ```bash
 # 从单个种子开始，深度2，JSON输出
-cargo run -- --seed https://example.com --depth 2 --output results
+cargo run -- --seed https://example.com --max-depth 2 --output results
 
 # 多种子 + 域名限制 + CSV输出
 cargo run -- \
@@ -39,15 +39,15 @@ cargo run -- \
   --seed https://crates.io \
   --allow docs.rs \
   --allow crates.io \
-  --depth 3 \
+  --max-depth 3 \
   --format csv \
   --output results
 
 # SQLite + 并发控制 + 详细日志
 RUST_LOG=debug cargo run -- \
   --seed https://rust-lang.org \
-  --depth 2 \
-  --concurrency 10 \
+  --max-depth 2 \
+  --max-concurrency 10 \
   --format sqlite \
   --output crawl.db \
   --verbose
@@ -111,6 +111,16 @@ cargo test --test integration_tests
 # 生成测试覆盖率报告
 cargo tarpaulin --out Html
 ```
+
+## ✅ GitHub Actions CI
+
+项目已配置 GitHub Actions CI，自动执行：
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test`
+
+CI 配置文件位于 `.github/workflows/ci.yml`。
 
 ## 📊 技术栈
 
