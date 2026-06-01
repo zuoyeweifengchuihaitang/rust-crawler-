@@ -52,8 +52,6 @@ pub struct Crawler {
     storage: Arc<dyn Storage>,
     stats: Arc<RwLock<CrawlStats>>,
     robots_manager: Option<Arc<RobotsManager>>,
-    #[allow(dead_code)]
-    shutdown_tx: Option<mpsc::Sender<()>>,
 }
 
 impl Crawler {
@@ -95,7 +93,6 @@ impl Crawler {
             storage,
             stats,
             robots_manager,
-            shutdown_tx: None,
         })
     }
 

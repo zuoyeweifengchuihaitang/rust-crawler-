@@ -107,12 +107,7 @@ async fn test_crawler_with_mock_server() {
     };
 
     // 创建并运行爬虫
-    println!(
-        "debug-test: starting crawler with seed {}",
-        mock_server.uri()
-    );
     let crawler = Crawler::new(config).await.unwrap();
-    println!("debug-test: crawler initialized");
     let stats = crawler.run().await.unwrap();
 
     // 验证：应该抓到 3 个页面（首页、about、contact）
