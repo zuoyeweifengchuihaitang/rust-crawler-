@@ -54,6 +54,26 @@ const NOISE_PATTERNS: &[&str] = &[
 /// 主要内容标签：优先从这些标签提取正文
 const CONTENT_TAGS: &[&str] = &["article", "main"];
 
+/// 密度提取候选
+#[derive(Debug)]
+struct DensityCandidate {
+    text: String,
+    score: f64,
+}
+
+/// 元素统计信息（用于密度计算）
+#[derive(Debug)]
+struct ElementStats {
+    /// 文本字符数
+    text_len: usize,
+    /// 子孙标签数量
+    tag_count: usize,
+    /// 合并后的文本
+    text: String,
+    /// 链接文本字符数
+    link_text_len: usize,
+}
+
 /// HTML 解析器
 ///
 /// 提供静态方法解析 HTML 内容，无需实例化。
@@ -107,7 +127,8 @@ impl HtmlParser {
     ///
     /// 策略：
     /// 1. 优先从 `<article>` 或 `<main>` 标签提取（语义化内容区域）
-    /// 2. 如果没有，从 `<body>` 提取，但跳过噪声区域（导航栏、页脚、广告等）
+    /// 2. 如果没有语义化标签，使用**文本密度评分**自动识别最大文本块
+    /// 3. 最后回退到 `<body>` 提取，跳过已知噪声区域
     fn extract_content(document: &Html) -> Option<String> {
         // 策略 1：尝试从语义化内容标签提取
         for tag in CONTENT_TAGS {
@@ -122,7 +143,13 @@ impl HtmlParser {
             }
         }
 
-        // 策略 2：从 body 提取，跳过噪声区域
+        // 策略 2：基于文本密度自动识别正文区域
+        // 适用于没有 article/main 标签的网页
+        if let Some(content) = Self::extract_by_density(document) {
+            return Some(content);
+        }
+
+        // 策略 3：从 body 提取，跳过噪声区域
         let body_selector = Selector::parse("body").ok()?;
         let body = document.select(&body_selector).next()?;
 
@@ -134,6 +161,151 @@ impl HtmlParser {
             None
         } else {
             Some(content)
+        }
+    }
+
+    /// 基于文本密度的正文提取
+    ///
+    /// 算法：遍历所有块级元素，计算每个元素的"文本密度得分"：
+    /// - 文本密度 = 文本字符数 / 标签数量（越高说明单位标签承载的文本越多）
+    /// - 链接密度 = 链接文本 / 总文本（越低越不像导航栏/列表）
+    /// - 得分 = 文本密度 × (1 - 链接密度) × √文本长度
+    ///
+    /// 选择得分最高的元素作为正文区域。
+    fn extract_by_density(document: &Html) -> Option<String> {
+        let body_selector = Selector::parse("body").ok()?;
+        let body = document.select(&body_selector).next()?;
+
+        let mut candidates: Vec<DensityCandidate> = Vec::new();
+        Self::collect_density_candidates(&body, &mut candidates);
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // 按得分降序排序
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // 返回得分最高的候选
+        candidates.into_iter().next().map(|c| c.text)
+    }
+
+    /// 递归收集密度候选
+    fn collect_density_candidates(element: &ElementRef, candidates: &mut Vec<DensityCandidate>) {
+        // 噪声元素不成为候选，也不递归其子元素
+        if Self::is_noise_element(element) {
+            return;
+        }
+
+        let tag_name = element.value().name();
+
+        // 只考虑容器级标签作为候选
+        let is_container = matches!(
+            tag_name,
+            "div" | "section" | "td" | "li" | "blockquote"
+        );
+
+        if is_container {
+            let stats = Self::calc_element_stats(element);
+
+            // 只保留有足够文本量的候选
+            if stats.text_len >= 50 {
+                let tag_count = stats.tag_count.max(1) as f64;
+                let text_len_f = stats.text_len as f64;
+                let link_text_f = stats.link_text_len as f64;
+
+                let text_density = text_len_f / tag_count;
+                let link_density = if text_len_f > 0.0 {
+                    link_text_f / text_len_f
+                } else {
+                    0.0
+                };
+
+                // 得分公式：高密度 + 低链接密度 + 一定文本量
+                let score = text_density * (1.0 - link_density) * text_len_f.sqrt();
+
+                candidates.push(DensityCandidate {
+                    text: stats.text,
+                    score,
+                });
+            }
+        }
+
+        // 递归到子元素（即使是容器也要递归，让子元素也有机会成为候选）
+        for child in element.children() {
+            if let Some(child_el) = ElementRef::wrap(child) {
+                Self::collect_density_candidates(&child_el, candidates);
+            }
+        }
+    }
+
+    /// 计算元素及其子孙的统计信息
+    fn calc_element_stats(element: &ElementRef) -> ElementStats {
+        let mut text_parts = Vec::new();
+        let mut tag_count = 0;
+        let mut link_text_parts = Vec::new();
+
+        Self::calc_stats_recursive(element, &mut text_parts, &mut tag_count, &mut link_text_parts);
+
+        let text = Self::join_and_clean(&text_parts);
+        let link_text = Self::join_and_clean(&link_text_parts);
+
+        ElementStats {
+            text_len: text.chars().count(),
+            tag_count,
+            text,
+            link_text_len: link_text.chars().count(),
+        }
+    }
+
+    /// 递归计算统计信息
+    fn calc_stats_recursive(
+        element: &ElementRef,
+        text_parts: &mut Vec<String>,
+        tag_count: &mut usize,
+        link_text_parts: &mut Vec<String>,
+    ) {
+        if Self::is_noise_element(element) {
+            return;
+        }
+
+        let tag_name = element.value().name();
+        let is_element_tag = tag_name != "body";
+
+        if is_element_tag {
+            *tag_count += 1;
+        }
+
+        // 判断是否是 <a> 标签（用于计算链接文本）
+        let is_link = tag_name == "a";
+
+        for child in element.children() {
+            match child.value() {
+                scraper::Node::Text(text) => {
+                    let t = text.text.trim();
+                    if !t.is_empty() {
+                        text_parts.push(t.to_string());
+                        if is_link {
+                            link_text_parts.push(t.to_string());
+                        }
+                    }
+                }
+                scraper::Node::Element(_) => {
+                    if let Some(child_el) = ElementRef::wrap(child) {
+                        Self::calc_stats_recursive(
+                            &child_el,
+                            text_parts,
+                            tag_count,
+                            link_text_parts,
+                        );
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -632,5 +804,166 @@ mod tests {
         let page = HtmlParser::parse(&base_url, html, 0, 200, 100);
 
         assert!(page.content.is_none());
+    }
+
+    // ───────────────────────────────────────────────
+    //  文本密度评分测试
+    // ───────────────────────────────────────────────
+
+    #[test]
+    fn test_density_extracts_largest_text_block() {
+        // 没有 article/main 标签，正文和噪声混在一起
+        let html = r#"
+            <html><body>
+                <div>
+                    <a href="/">Home</a>
+                    <a href="/about">About</a>
+                </div>
+                <div>
+                    <h1>Main Article</h1>
+                    <p>This is a long paragraph with lots of text content.</p>
+                    <p>It continues with more interesting information here.</p>
+                    <p>The third paragraph adds even more substance to the article.</p>
+                </div>
+                <div>
+                    <a href="/link1">Related</a>
+                    <a href="/link2">More</a>
+                </div>
+            </body></html>
+        "#;
+
+        let base_url = Url::parse("https://example.com").unwrap();
+        let page = HtmlParser::parse(&base_url, html, 0, 200, 100);
+
+        let content = page.content.expect("应该有内容");
+        // 密度提取应选中最大的文本块（中间 div）
+        assert!(content.contains("Main Article"));
+        assert!(content.contains("long paragraph"));
+        assert!(content.contains("interesting information"));
+    }
+
+    #[test]
+    fn test_density_prefers_low_link_density() {
+        // 两个文本量相近的块，但一个链接密度高（导航），一个低（正文）
+        let html = r#"
+            <html><body>
+                <div>
+                    <a href="/a">Link A</a>
+                    <a href="/b">Link B</a>
+                    <a href="/c">Link C</a>
+                    <a href="/d">Link D</a>
+                    <a href="/e">Link E</a>
+                    <span>Some nav text</span>
+                </div>
+                <div>
+                    <h2>Real Content</h2>
+                    <p>This is the actual article body with substantial text.</p>
+                    <p>More paragraphs of real content go here.</p>
+                </div>
+            </body></html>
+        "#;
+
+        let base_url = Url::parse("https://example.com").unwrap();
+        let page = HtmlParser::parse(&base_url, html, 0, 200, 100);
+
+        let content = page.content.expect("应该有内容");
+        // 低链接密度的正文块应该胜出
+        assert!(content.contains("Real Content"));
+        assert!(content.contains("actual article body"));
+    }
+
+    #[test]
+    fn test_density_with_wrapper_layout() {
+        // 真实网页常见结构：wrapper 包裹所有内容
+        let html = r#"
+            <html><body>
+                <div id="wrapper">
+                    <div id="nav">
+                        <a href="/">Home</a>
+                        <a href="/products">Products</a>
+                    </div>
+                    <div id="content-area">
+                        <h1>Product Review</h1>
+                        <p>This product is amazing and works very well.</p>
+                        <p>We tested it thoroughly and found excellent results.</p>
+                        <p>The build quality is top notch and durable.</p>
+                    </div>
+                    <div id="sidebar">
+                        <div class="widget">Categories</div>
+                        <div class="widget">Tags</div>
+                    </div>
+                </div>
+            </body></html>
+        "#;
+
+        let base_url = Url::parse("https://example.com").unwrap();
+        let page = HtmlParser::parse(&base_url, html, 0, 200, 100);
+
+        let content = page.content.expect("应该有内容");
+        // 噪声 class 被过滤，正文应来自 content-area
+        assert!(content.contains("Product Review"));
+        assert!(content.contains("product is amazing"));
+        assert!(!content.contains("Categories"));
+        assert!(!content.contains("Tags"));
+    }
+
+    #[test]
+    fn test_density_table_layout() {
+        // 老式 table 布局网页
+        let html = r#"
+            <html><body>
+                <table>
+                    <tr><td>
+                        <a href="/">Home</a> | <a href="/contact">Contact</a>
+                    </td></tr>
+                    <tr><td>
+                        <h2>News Article</h2>
+                        <p>Breaking news today with detailed reporting.</p>
+                        <p>More details about the event unfold here.</p>
+                    </td></tr>
+                    <tr><td>
+                        Copyright 2024
+                    </td></tr>
+                </table>
+            </body></html>
+        "#;
+
+        let base_url = Url::parse("https://example.com").unwrap();
+        let page = HtmlParser::parse(&base_url, html, 0, 200, 100);
+
+        let content = page.content.expect("应该有内容");
+        // 应提取到新闻文章区域的文本（td 是容器标签）
+        assert!(content.contains("News Article"));
+        assert!(content.contains("Breaking news"));
+    }
+
+    #[test]
+    fn test_density_nested_content() {
+        // 嵌套结构：正文在多层 div 内
+        let html = r#"
+            <html><body>
+                <div class="container">
+                    <div class="row">
+                        <div class="col">
+                            <h1>Deep Nested Article</h1>
+                            <p>This content is buried deep in nested divs.</p>
+                            <p>But it should still be found because it has high text density.</p>
+                            <p>Each paragraph adds more text to make this block stand out.</p>
+                        </div>
+                        <div class="col sidebar">
+                            <p>Side info</p>
+                        </div>
+                    </div>
+                </div>
+            </body></html>
+        "#;
+
+        let base_url = Url::parse("https://example.com").unwrap();
+        let page = HtmlParser::parse(&base_url, html, 0, 200, 100);
+
+        let content = page.content.expect("应该有内容");
+        assert!(content.contains("Deep Nested Article"));
+        assert!(content.contains("buried deep"));
+        assert!(!content.contains("Side info"));
     }
 }
