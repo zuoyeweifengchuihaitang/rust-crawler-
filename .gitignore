@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.db
+*.json
+*.csv
+/test_output*
+/test.json
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
