@@ -13,7 +13,7 @@
 - **优雅的错误处理**：全链路 `Result<T, E>`，自定义错误类型
 - **模块化设计**：清晰的模块划分，trait 抽象存储后端
 - **进度显示**：终端实时显示爬取进度
-- **礼貌爬取**：支持请求间隔，遵循 robots.txt（可选）
+- **礼貌爬取**：支持请求间隔，遵循 robots.txt（可选），并可在请求失败时自动重试
 
 ## 🚀 快速开始
 
@@ -63,6 +63,8 @@ Options:
   -d, --max-depth <DEPTH>    最大爬取深度 [默认: 2]
   -c, --max-concurrency <N>  最大并发请求数 [默认: 10]
       --timeout-secs <SEC>   请求超时时间 [默认: 30]
+      --retry-count <N>      请求失败重试次数 [默认: 2]
+      --retry-delay-ms <MS>  重试间隔 [默认: 500]
       --delay-ms <MS>        请求间隔 [默认: 100]
       --allow <DOMAIN>       允许的域名
       --exclude <PATTERN>    排除的URL模式

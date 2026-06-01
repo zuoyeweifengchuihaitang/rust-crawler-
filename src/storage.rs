@@ -257,12 +257,7 @@ impl Storage for SqliteStorage {
             conn.execute(
                 "INSERT INTO links (page_url, link_text, link_url, is_internal)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    &page.url,
-                    &link.text,
-                    &link.url,
-                    link.is_internal as i32,
-                ],
+                params![&page.url, &link.text, &link.url, link.is_internal as i32,],
             )?;
         }
 
@@ -285,15 +280,9 @@ pub fn create_storage(
     path: &Path,
 ) -> Result<Box<dyn Storage>, StorageError> {
     match format {
-        crate::config::OutputFormat::Json => {
-            Ok(Box::new(JsonStorage::new(path)?))
-        }
-        crate::config::OutputFormat::Csv => {
-            Ok(Box::new(CsvStorage::new(path)?))
-        }
-        crate::config::OutputFormat::Sqlite => {
-            Ok(Box::new(SqliteStorage::new(path)?))
-        }
+        crate::config::OutputFormat::Json => Ok(Box::new(JsonStorage::new(path)?)),
+        crate::config::OutputFormat::Csv => Ok(Box::new(CsvStorage::new(path)?)),
+        crate::config::OutputFormat::Sqlite => Ok(Box::new(SqliteStorage::new(path)?)),
     }
 }
 
@@ -323,12 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_storage_trait_object() {
-        let page = Page::new(
-            "https://example.com".to_string(),
-            200,
-            0,
-            100,
-        );
+        let page = Page::new("https://example.com".to_string(), 200, 0, 100);
 
         let storage: Box<dyn Storage> =
             Box::new(JsonStorage::new(PathBuf::from("test.json")).unwrap());
@@ -349,24 +333,14 @@ mod tests {
         // 创建存储并保存页面
         let storage = JsonStorage::new(&file_path).unwrap();
 
-        let mut page = Page::new(
-            "https://example.com/page1".to_string(),
-            200,
-            0,
-            150,
-        );
+        let mut page = Page::new("https://example.com/page1".to_string(), 200, 0, 150);
         page.title = Some("Example Page".to_string());
         page.content = Some("This is the content".to_string());
 
         // 保存多个页面
         assert!(storage.save_page(&page).await.is_ok());
 
-        let mut page2 = Page::new(
-            "https://example.com/page2".to_string(),
-            200,
-            1,
-            120,
-        );
+        let mut page2 = Page::new("https://example.com/page2".to_string(), 200, 1, 120);
         page2.title = Some("Another Page".to_string());
 
         assert!(storage.save_page(&page2).await.is_ok());

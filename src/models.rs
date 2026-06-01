@@ -32,12 +32,7 @@ pub struct Page {
 
 impl Page {
     /// 创建一个新的 Page 实例
-    pub fn new(
-        url: String,
-        status_code: u16,
-        depth: u32,
-        fetch_duration_ms: u64,
-    ) -> Self {
+    pub fn new(url: String, status_code: u16, depth: u32, fetch_duration_ms: u64) -> Self {
         Self {
             url,
             title: None,
@@ -178,12 +173,7 @@ mod tests {
 
     #[test]
     fn test_page_creation() {
-        let page = Page::new(
-            "https://example.com".to_string(),
-            200,
-            0,
-            100,
-        );
+        let page = Page::new("https://example.com".to_string(), 200, 0, 100);
         assert_eq!(page.url, "https://example.com");
         assert_eq!(page.status_code, 200);
         assert_eq!(page.depth, 0);

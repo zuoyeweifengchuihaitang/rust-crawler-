@@ -53,6 +53,16 @@ pub enum FetcherError {
     NotHtml(Option<String>),
 }
 
+impl FetcherError {
+    fn is_transient(&self) -> bool {
+        match self {
+            FetcherError::HttpError(_) | FetcherError::Timeout(_) => true,
+            FetcherError::BadStatus(status) => matches!(status, 429 | 500..=599),
+            _ => false,
+        }
+    }
+}
+
 impl Fetcher {
     /// 创建新的 HTTP 获取器
     ///
@@ -65,6 +75,7 @@ impl Fetcher {
             .timeout(timeout)
             .user_agent(user_agent)
             .pool_max_idle_per_host(10)
+            .redirect(reqwest::redirect::Policy::limited(10))
             .build()?;
 
         Ok(Self {
@@ -81,21 +92,17 @@ impl Fetcher {
         let start = Instant::now();
 
         // 发送 GET 请求
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    FetcherError::Timeout(self.timeout.as_secs())
-                } else {
-                    FetcherError::HttpError(e)
-                }
-            })?;
+        let response = self.client.get(url).send().await.map_err(|e| {
+            if e.is_timeout() {
+                FetcherError::Timeout(self.timeout.as_secs())
+            } else {
+                FetcherError::HttpError(e)
+            }
+        })?;
 
         let status = response.status();
         let headers = response.headers().clone();
+        let final_url = response.url().to_string();
 
         // 检查内容类型，只处理 HTML
         let content_type = headers
@@ -108,16 +115,6 @@ impl Fetcher {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // 构建结果
-        let result = FetchResult {
-            url: url.to_string(),
-            status,
-            headers,
-            body,
-            duration_ms,
-            content_type: content_type.clone(),
-        };
-
         // 检查状态码
         if !status.is_success() {
             return Err(FetcherError::BadStatus(status.as_u16()));
@@ -125,17 +122,57 @@ impl Fetcher {
 
         // 检查是否是 HTML
         if let Some(ref ct) = content_type {
-            if !ct.contains("text/html") {
+            if !ct.contains("text/html") && !ct.contains("application/xhtml+xml") {
                 return Err(FetcherError::NotHtml(Some(ct.clone())));
             }
         }
 
+        // 构建结果
+        let result = FetchResult {
+            url: final_url,
+            status,
+            headers,
+            body,
+            duration_ms,
+            content_type: content_type.clone(),
+        };
+
         Ok(result)
+    }
+
+    /// 异步获取单个 URL，带自动重试
+    pub async fn fetch_with_retries(
+        &self,
+        url: &str,
+        retries: usize,
+        retry_delay_ms: u64,
+    ) -> Result<FetchResult, FetcherError> {
+        let mut last_error = None;
+
+        for attempt in 0..=retries {
+            match self.fetch(url).await {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    if attempt == retries || !err.is_transient() {
+                        return Err(err);
+                    }
+                    last_error = Some(err);
+                    tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
+                }
+            }
+        }
+
+        Err(last_error.expect("fetch_with_retries should always produce an error"))
     }
 
     /// 获取 User-Agent
     pub fn user_agent(&self) -> &str {
         &self.user_agent
+    }
+
+    /// 获取内部 reqwest 客户端
+    pub fn client(&self) -> Client {
+        self.client.clone()
     }
 
     /// 获取超时时间

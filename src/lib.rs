@@ -14,6 +14,7 @@ pub mod fetcher;
 pub mod filter;
 pub mod models;
 pub mod parser;
+pub mod robots;
 pub mod storage;
 
 // Re-export 核心类型，方便外部使用

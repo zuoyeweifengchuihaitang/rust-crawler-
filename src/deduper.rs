@@ -84,10 +84,7 @@ fn normalize_url(u: &str) -> Option<String> {
 
     // 对 query 参数排序，保证相同参数但不同顺序的 URL 被视为相同。
     if url.query().is_some() {
-        let mut pairs: Vec<(String, String)> = url
-            .query_pairs()
-            .into_owned()
-            .collect();
+        let mut pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
         pairs.sort();
 
         let mut query_pairs = url.query_pairs_mut();
@@ -152,7 +149,11 @@ mod tests {
     async fn test_deduper_normalizes_query_and_fragment() {
         let deduper = MemoryDeduper::new();
 
-        assert!(deduper.try_add("https://example.com/page?b=2&a=1#section").await);
+        assert!(
+            deduper
+                .try_add("https://example.com/page?b=2&a=1#section")
+                .await
+        );
         assert!(!deduper.try_add("https://example.com/page?a=1&b=2").await);
         assert_eq!(deduper.len().await, 1);
     }
@@ -166,8 +167,7 @@ mod tests {
         for i in 0..10 {
             let d = deduper.clone();
             handles.push(tokio::spawn(async move {
-                d.try_add(&format!("https://example.com/{}", i % 3))
-                    .await
+                d.try_add(&format!("https://example.com/{}", i % 3)).await
             }));
         }
 

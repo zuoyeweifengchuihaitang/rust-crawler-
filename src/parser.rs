@@ -33,12 +33,7 @@ impl HtmlParser {
     ) -> Page {
         let document = Html::parse_document(html);
 
-        let mut page = Page::new(
-            base_url.to_string(),
-            status_code,
-            depth,
-            fetch_duration_ms,
-        );
+        let mut page = Page::new(base_url.to_string(), status_code, depth, fetch_duration_ms);
 
         // 提取标题
         page.title = Self::extract_title(&document);
@@ -73,7 +68,11 @@ impl HtmlParser {
         let mut text_parts = Vec::new();
         Self::extract_text_recursive(&body, &mut text_parts);
 
-        let content = text_parts.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        let content = text_parts
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
 
         if content.is_empty() {
             None
@@ -121,10 +120,7 @@ impl HtmlParser {
         };
 
         for element in document.select(&selector) {
-            let href = element
-                .value()
-                .attr("href")
-                .unwrap_or("");
+            let href = element.value().attr("href").unwrap_or("");
 
             // 跳过空链接和锚点
             if href.is_empty() || href.starts_with('#') {
@@ -153,11 +149,7 @@ impl HtmlParser {
             // 判断是否是内部链接
             let is_internal = Self::is_internal_link(base_url, &absolute_url);
 
-            links.push(Link::new(
-                text,
-                absolute_url.to_string(),
-                is_internal,
-            ));
+            links.push(Link::new(text, absolute_url.to_string(), is_internal));
         }
 
         links

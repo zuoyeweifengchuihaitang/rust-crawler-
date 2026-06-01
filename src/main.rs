@@ -11,9 +11,7 @@ use tracing::{info, warn};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. 初始化日志系统
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
         .init();
 
     // 2. 解析命令行参数
@@ -90,22 +88,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   已抓取页面: {}", stats.pages_fetched);
             println!("   成功解析:   {}", stats.pages_parsed);
             println!("   失败:       {}", stats.pages_failed);
-            println!(
-                "   成功率:     {:.1}%",
-                stats.success_rate()
-            );
-            println!(
-                "   发现链接:   {}",
-                stats.links_discovered
-            );
-            println!(
-                "   总耗时:     {:.2} 秒",
-                duration.as_secs_f64()
-            );
-            println!(
-                "   平均速度:   {:.2} 页/秒",
-                stats.pages_per_second()
-            );
+            println!("   成功率:     {:.1}%", stats.success_rate());
+            println!("   发现链接:   {}", stats.links_discovered);
+            println!("   总耗时:     {:.2} 秒", duration.as_secs_f64());
+            println!("   平均速度:   {:.2} 页/秒", stats.pages_per_second());
             println!();
             println!(
                 "💾 数据已保存至: {}",
@@ -132,19 +118,15 @@ fn print_config(config: &CrawlerConfig) {
     println!("种子 URL:    {}", config.seeds.join(", "));
     println!("最大深度:    {}", config.max_depth);
     println!("并发数:      {}", config.max_concurrency);
-    println!("超时:        {} 秒", config.timeout_secs);
+    println!("请求超时:    {} 秒", config.timeout_secs);
+    println!("请求重试次数: {}", config.retry_count);
+    println!("重试延迟:    {} 毫秒", config.retry_delay_ms);
     println!("请求间隔:    {} 毫秒", config.delay_ms);
     println!("输出格式:    {}", config.format);
-    println!(
-        "输出路径:    {}",
-        config.output_path_with_ext().display()
-    );
+    println!("输出路径:    {}", config.output_path_with_ext().display());
 
     if !config.allowed_domains.is_empty() {
-        println!(
-            "允许域名:    {}",
-            config.allowed_domains.join(", ")
-        );
+        println!("允许域名:    {}", config.allowed_domains.join(", "));
     }
 
     if config.max_pages > 0 {

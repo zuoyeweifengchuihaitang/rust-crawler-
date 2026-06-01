@@ -66,6 +66,14 @@ pub struct CrawlerConfig {
     #[arg(long, default_value = "30", help = "每个请求的超时时间（秒）")]
     pub timeout_secs: u64,
 
+    /// 请求重试次数
+    #[arg(long, default_value = "2", help = "请求失败时的重试次数")]
+    pub retry_count: usize,
+
+    /// 重试延迟（毫秒）
+    #[arg(long, default_value = "500", help = "请求失败后的重试延迟（毫秒）")]
+    pub retry_delay_ms: u64,
+
     /// 请求间隔（毫秒）
     #[arg(long, default_value = "100", help = "请求间隔（毫秒），礼貌爬取")]
     pub delay_ms: u64,
@@ -87,11 +95,21 @@ pub struct CrawlerConfig {
     pub max_pages: usize,
 
     /// 输出格式
-    #[arg(short, long, default_value = "json", help = "输出格式: json, csv, sqlite")]
+    #[arg(
+        short,
+        long,
+        default_value = "json",
+        help = "输出格式: json, csv, sqlite"
+    )]
     pub format: OutputFormat,
 
     /// 输出文件路径
-    #[arg(short, long, default_value = "output", help = "输出文件路径（不含扩展名）")]
+    #[arg(
+        short,
+        long,
+        default_value = "output",
+        help = "输出文件路径（不含扩展名）"
+    )]
     pub output: PathBuf,
 
     /// 是否遵循 robots.txt
@@ -111,6 +129,8 @@ impl CrawlerConfig {
             max_depth: 1,
             max_concurrency: 5,
             timeout_secs: 10,
+            retry_count: 2,
+            retry_delay_ms: 100,
             delay_ms: 0,
             allowed_domains: vec![],
             exclude_patterns: vec![],
@@ -140,6 +160,16 @@ impl CrawlerConfig {
         // 检查并发数是否合理
         if self.max_concurrency == 0 {
             return Err(ConfigError::InvalidConcurrency);
+        }
+
+        // 检查超时时间是否合理
+        if self.timeout_secs == 0 {
+            return Err(ConfigError::InvalidTimeout);
+        }
+
+        // 检查重试次数是否合理
+        if self.retry_count > 10 {
+            return Err(ConfigError::RetryCountTooLarge(self.retry_count));
         }
 
         // 检查深度是否合理
@@ -198,6 +228,12 @@ pub enum ConfigError {
     #[error("并发数必须大于 0")]
     InvalidConcurrency,
 
+    #[error("无效的超时时间")]
+    InvalidTimeout,
+
+    #[error("重试次数 {0} 过大，建议不超过 10")]
+    RetryCountTooLarge(usize),
+
     #[error("爬取深度 {0} 过大，建议不超过 10")]
     DepthTooLarge(u32),
 }
@@ -208,10 +244,7 @@ mod tests {
 
     #[test]
     fn test_output_format_from_str() {
-        assert_eq!(
-            "json".parse::<OutputFormat>().unwrap(),
-            OutputFormat::Json
-        );
+        assert_eq!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
         assert_eq!("csv".parse::<OutputFormat>().unwrap(), OutputFormat::Csv);
         assert_eq!(
             "sqlite".parse::<OutputFormat>().unwrap(),
@@ -231,16 +264,18 @@ mod tests {
 
         // 无效 URL
         config.seeds = vec!["not-a-url".to_string()];
-        assert!(
-            matches!(config.validate(), Err(ConfigError::InvalidUrl(_, _)))
-        );
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidUrl(_, _))
+        ));
 
         // 并发数为 0
         config = CrawlerConfig::default_for_test();
         config.max_concurrency = 0;
-        assert!(
-            matches!(config.validate(), Err(ConfigError::InvalidConcurrency))
-        );
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidConcurrency)
+        ));
     }
 
     #[test]

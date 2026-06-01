@@ -21,6 +21,8 @@ fn create_test_config(base_url: &str) -> CrawlerConfig {
         max_depth: 2,
         max_concurrency: 2,
         timeout_secs: 5,
+        retry_count: 2,
+        retry_delay_ms: 100,
         delay_ms: 0,
         allowed_domains: vec![host],
         exclude_patterns: vec![],
@@ -41,56 +43,47 @@ async fn test_crawler_with_mock_server() {
     // 首页：包含两个链接
     Mock::given(method("GET"))
         .and(path_regex("^/?$"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"<html><head><title>Home Page</title></head>
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<html><head><title>Home Page</title></head>
             <body>
                 <h1>Welcome</h1>
                 <a href="/about">About</a>
                 <a href="/contact">Contact</a>
             </body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
     // About 页面：包含一个链接回到首页
     Mock::given(method("GET"))
         .and(path("/about"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>About Page</title></head>
             <body>
                 <h1>About Us</h1>
                 <a href="/">Back to Home</a>
             </body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
     // Contact 页面：无链接
     Mock::given(method("GET"))
         .and(path("/contact"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>Contact Page</title></head>
             <body>
                 <h1>Contact Us</h1>
             </body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
@@ -100,6 +93,8 @@ async fn test_crawler_with_mock_server() {
         max_depth: 2,
         max_concurrency: 2,
         timeout_secs: 5,
+        retry_count: 2,
+        retry_delay_ms: 100,
         delay_ms: 0,
         allowed_domains: vec![],
         exclude_patterns: vec![],
@@ -112,7 +107,10 @@ async fn test_crawler_with_mock_server() {
     };
 
     // 创建并运行爬虫
-    println!("debug-test: starting crawler with seed {}", mock_server.uri());
+    println!(
+        "debug-test: starting crawler with seed {}",
+        mock_server.uri()
+    );
     let crawler = Crawler::new(config).await.unwrap();
     println!("debug-test: crawler initialized");
     let stats = crawler.run().await.unwrap();
@@ -137,47 +135,38 @@ async fn test_crawler_respects_max_depth() {
     // 首页 → 链接到 level1
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"<html><head><title>Level 0</title></head>
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<html><head><title>Level 0</title></head>
             <body><a href="/level1">Level 1</a></body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
     // Level 1 → 链接到 level2
     Mock::given(method("GET"))
         .and(path("/level1"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>Level 1</title></head>
             <body><a href="/level2">Level 2</a></body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
     // Level 2
     Mock::given(method("GET"))
         .and(path("/level2"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>Level 2</title></head>
             <body><h1>Deep Page</h1></body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
@@ -187,6 +176,8 @@ async fn test_crawler_respects_max_depth() {
         max_depth: 1,
         max_concurrency: 2,
         timeout_secs: 5,
+        retry_count: 2,
+        retry_delay_ms: 100,
         delay_ms: 0,
         allowed_domains: vec![],
         exclude_patterns: vec![],
@@ -211,10 +202,8 @@ async fn test_crawler_respects_max_pages() {
 
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>Home</title></head>
             <body>
                 <a href="/page1">Page 1</a>
@@ -222,9 +211,8 @@ async fn test_crawler_respects_max_pages() {
                 <a href="/page3">Page 3</a>
             </body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
@@ -232,19 +220,16 @@ async fn test_crawler_respects_max_pages() {
     for i in 1..=3 {
         Mock::given(method("GET"))
             .and(path(format!("/page{}", i)))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(
-                        format!(
-                            r#"
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!(
+                    r#"
                 <html><head><title>Page {}</title></head>
                 <body><h1>Page {}</h1></body></html>
                 "#,
-                            i, i
-                        ),
-                        "text/html; charset=utf-8",
-                    ),
-            )
+                    i, i
+                ),
+                "text/html; charset=utf-8",
+            ))
             .mount(&mock_server)
             .await;
     }
@@ -255,6 +240,8 @@ async fn test_crawler_respects_max_pages() {
         max_depth: 2,
         max_concurrency: 2,
         timeout_secs: 5,
+        retry_count: 2,
+        retry_delay_ms: 100,
         delay_ms: 0,
         allowed_domains: vec![],
         exclude_patterns: vec![],
@@ -278,34 +265,28 @@ async fn test_crawler_domain_filter() {
 
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>Home</title></head>
             <body>
                 <a href="/internal">Internal</a>
                 <a href="https://other.com/external">External</a>
             </body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
     Mock::given(method("GET"))
         .and(path("/internal"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(
-                    r#"
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"
             <html><head><title>Internal</title></head>
             <body><h1>Internal Page</h1></body></html>
             "#,
-                    "text/html; charset=utf-8",
-                ),
-        )
+            "text/html; charset=utf-8",
+        ))
         .mount(&mock_server)
         .await;
 
@@ -323,6 +304,8 @@ async fn test_crawler_domain_filter() {
         max_depth: 2,
         max_concurrency: 2,
         timeout_secs: 5,
+        retry_count: 2,
+        retry_delay_ms: 100,
         delay_ms: 0,
         allowed_domains: vec![allowed],
         exclude_patterns: vec![],

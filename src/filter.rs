@@ -72,9 +72,7 @@ impl UrlFilter {
     /// 判断链接是否是内部链接（与给定 URL 同域名）
     pub fn is_internal(base: &Url, target: &Url) -> bool {
         match (base.host_str(), target.host_str()) {
-            (Some(base_host), Some(target_host)) => {
-                base_host == target_host
-            }
+            (Some(base_host), Some(target_host)) => base_host == target_host,
             _ => false,
         }
     }
