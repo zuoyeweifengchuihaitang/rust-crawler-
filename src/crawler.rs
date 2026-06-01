@@ -13,6 +13,7 @@ use crate::{
     robots::RobotsManager,
     storage::{create_storage, Storage},
 };
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -230,6 +231,10 @@ impl Crawler {
         // 使用信号量限制并发数
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrency));
 
+        // 每主机请求时间跟踪（用于 robots.txt Crawl-delay）
+        let host_deadlines: Arc<RwLock<HashMap<String, tokio::time::Instant>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+
         // 主循环：处理任务队列，生成抓取任务
         let mut task_count = 0;
         loop {
@@ -285,9 +290,36 @@ impl Crawler {
             let result_tx = result_tx.clone();
             let retry_count = self.config.retry_count;
             let retry_delay_ms = self.config.retry_delay_ms;
+            let robots_manager = self.robots_manager.clone();
+            let host_deadlines = Arc::clone(&host_deadlines);
+            let config_delay_ms = self.config.delay_ms;
 
             // 启动抓取任务
             tokio::spawn(async move {
+                // 应用请求延迟
+                // - 若 robots.txt 启用且指定了 Crawl-delay：按主机独立计时，取 Crawl-delay 与全局 delay 的较大值
+                // - 若 robots.txt 启用但无 Crawl-delay：使用全局 delay（也按主机计时，多主机时更礼貌）
+                // - 若 robots.txt 未启用：使用全局 delay（全局性休眠）
+                if let Some(robots_manager) = &robots_manager {
+                    let delay = match robots_manager.get_crawl_delay_ms(&task.url).await {
+                        Some(crawl_delay) => crawl_delay.max(config_delay_ms),
+                        None => config_delay_ms,
+                    };
+                    if delay > 0 {
+                        let host = task.url.host_str().unwrap_or("").to_string();
+                        let mut deadlines = host_deadlines.write().await;
+                        let now = tokio::time::Instant::now();
+                        let dl = deadlines.entry(host).or_insert(now);
+                        if *dl > now {
+                            tokio::time::sleep(*dl - now).await;
+                        }
+                        *dl =
+                            tokio::time::Instant::now() + tokio::time::Duration::from_millis(delay);
+                    }
+                } else if config_delay_ms > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(config_delay_ms)).await;
+                }
+
                 // 执行抓取
                 let crawl_result =
                     Self::process_task(task, fetcher, filter, retry_count, retry_delay_ms).await;
@@ -298,11 +330,6 @@ impl Crawler {
                 // 释放信号量许可（drop permit）
                 drop(permit);
             });
-
-            // 请求延迟（礼貌爬取）
-            if self.config.delay_ms > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(self.config.delay_ms)).await;
-            }
 
             // 调试信息
             if task_count % 10 == 0 {

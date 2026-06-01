@@ -13,6 +13,8 @@ use url::Url;
 pub struct RobotsTxt {
     allow: Vec<String>,
     disallow: Vec<String>,
+    /// Crawl-delay 值（秒），如果未设置则为 None
+    crawl_delay: Option<f64>,
 }
 
 impl RobotsTxt {
@@ -38,6 +40,11 @@ impl RobotsTxt {
             (None, Some(_)) => false,
             _ => true,
         }
+    }
+
+    /// 获取 Crawl-delay（毫秒）
+    pub fn crawl_delay_ms(&self) -> Option<u64> {
+        self.crawl_delay.map(|s| (s * 1000.0).ceil() as u64)
     }
 }
 
@@ -70,11 +77,42 @@ impl RobotsManager {
             return robots.is_allowed(url.path());
         }
 
+        let robots = self.fetch_and_cache(url).await;
+        robots.is_allowed(url.path())
+    }
+
+    /// 获取站点的 Crawl-delay（毫秒）
+    ///
+    /// 如果 robots.txt 中未指定 Crawl-delay，返回 None。
+    pub async fn get_crawl_delay_ms(&self, url: &Url) -> Option<u64> {
+        let host = match url.host_str() {
+            Some(host) => host,
+            None => return None,
+        };
+
+        let cache_key = format!("{}://{}", url.scheme(), host);
+        if let Some(robots) = self.cache.read().await.get(&cache_key) {
+            return robots.crawl_delay_ms();
+        }
+
+        let robots = self.fetch_and_cache(url).await;
+        robots.crawl_delay_ms()
+    }
+
+    /// 获取或获取并缓存 robots.txt
+    async fn fetch_and_cache(&self, url: &Url) -> RobotsTxt {
+        let host = match url.host_str() {
+            Some(host) => host,
+            None => return RobotsTxt::default(),
+        };
+
+        let cache_key = format!("{}://{}", url.scheme(), host);
+
         let robots_url = match Url::parse(&format!("{}://{}/robots.txt", url.scheme(), host)) {
             Ok(parsed) => parsed,
             Err(err) => {
                 warn!("解析 robots.txt URL 失败: {}", err);
-                return true;
+                return RobotsTxt::default();
             }
         };
 
@@ -87,7 +125,7 @@ impl RobotsManager {
         };
 
         self.cache.write().await.insert(cache_key, robots.clone());
-        robots.is_allowed(url.path())
+        robots
     }
 
     async fn fetch_robots(&self, robots_url: &Url) -> Result<RobotsTxt, reqwest::Error> {
@@ -109,6 +147,7 @@ fn parse_robots_txt(body: &str, user_agent: &str) -> RobotsTxt {
         user_agents: Vec<String>,
         allow: Vec<String>,
         disallow: Vec<String>,
+        crawl_delay: Option<f64>,
     }
 
     let mut groups = Vec::new();
@@ -143,6 +182,14 @@ fn parse_robots_txt(body: &str, user_agent: &str) -> RobotsTxt {
                 current.disallow.push(value);
                 last_directive_was_user_agent = false;
             }
+            "crawl-delay" => {
+                if let Ok(delay) = value.parse::<f64>() {
+                    if delay >= 0.0 {
+                        current.crawl_delay = Some(delay);
+                    }
+                }
+                last_directive_was_user_agent = false;
+            }
             _ => {
                 last_directive_was_user_agent = false;
             }
@@ -172,6 +219,7 @@ fn parse_robots_txt(body: &str, user_agent: &str) -> RobotsTxt {
     RobotsTxt {
         allow: selected.allow.clone(),
         disallow: selected.disallow.clone(),
+        crawl_delay: selected.crawl_delay,
     }
 }
 
@@ -197,5 +245,54 @@ mod tests {
         let robots = parse_robots_txt(text, "rust-crawler/0.1.0");
         assert!(robots.is_allowed("/public"));
         assert!(!robots.is_allowed("/private"));
+    }
+
+    #[test]
+    fn test_crawl_delay_parsed() {
+        let text = "User-agent: *\nDisallow: /admin\nCrawl-delay: 10\n";
+        let robots = parse_robots_txt(text, "rust-crawler");
+        assert_eq!(robots.crawl_delay_ms(), Some(10_000));
+    }
+
+    #[test]
+    fn test_crawl_delay_fractional() {
+        let text = "User-agent: *\nCrawl-delay: 2.5\n";
+        let robots = parse_robots_txt(text, "rust-crawler");
+        assert_eq!(robots.crawl_delay_ms(), Some(2500));
+    }
+
+    #[test]
+    fn test_crawl_delay_zero() {
+        let text = "User-agent: *\nCrawl-delay: 0\n";
+        let robots = parse_robots_txt(text, "rust-crawler");
+        assert_eq!(robots.crawl_delay_ms(), Some(0));
+    }
+
+    #[test]
+    fn test_crawl_delay_missing_is_none() {
+        let text = "User-agent: *\nDisallow: /admin\n";
+        let robots = parse_robots_txt(text, "rust-crawler");
+        assert_eq!(robots.crawl_delay_ms(), None);
+    }
+
+    #[test]
+    fn test_crawl_delay_only_for_matching_agent() {
+        let text = "User-agent: SlowBot\nCrawl-delay: 30\n\nUser-agent: *\nDisallow:\n";
+        let robots = parse_robots_txt(text, "FastBot");
+        assert_eq!(robots.crawl_delay_ms(), None);
+    }
+
+    #[test]
+    fn test_crawl_delay_ignores_invalid_value() {
+        let text = "User-agent: *\nCrawl-delay: not-a-number\n";
+        let robots = parse_robots_txt(text, "rust-crawler");
+        assert_eq!(robots.crawl_delay_ms(), None);
+    }
+
+    #[test]
+    fn test_crawl_delay_negatives_ignored() {
+        let text = "User-agent: *\nCrawl-delay: -5\n";
+        let robots = parse_robots_txt(text, "rust-crawler");
+        assert_eq!(robots.crawl_delay_ms(), None);
     }
 }
