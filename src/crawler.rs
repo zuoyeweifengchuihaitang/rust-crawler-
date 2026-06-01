@@ -12,8 +12,8 @@ use crate::{
     parser::HtmlParser,
     storage::{create_storage, Storage},
 };
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use tokio::sync::{mpsc, Notify, RwLock};
 
 /// 爬虫错误类型
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +96,8 @@ impl Crawler {
         // 创建任务队列和结果队列
         let (task_tx, mut task_rx) = mpsc::channel::<CrawlTask>(1000);
         let (result_tx, result_rx) = mpsc::channel::<CrawlResult>(1000);
+        let pending_tasks = Arc::new(AtomicUsize::new(0));
+        let finish_notify = Arc::new(Notify::new());
 
         // 将种子 URL 加入任务队列
         for seed in &self.config.seeds {
@@ -109,6 +111,7 @@ impl Crawler {
                 .send(task)
                 .await
                 .map_err(|_| CrawlerError::TaskSendError)?;
+            pending_tasks.fetch_add(1, Ordering::SeqCst);
         }
 
         // 启动结果处理任务（往存储写入）和新链接处理
@@ -117,12 +120,21 @@ impl Crawler {
         let deduper_clone = Arc::clone(&self.deduper);
         let filter_clone = Arc::clone(&self.filter);
 
+        let task_tx_for_results = task_tx.clone();
+        let pending_tasks_clone = Arc::clone(&pending_tasks);
+        let finish_notify_clone = Arc::clone(&finish_notify);
         let result_handle = {
-            let task_tx = task_tx.clone();
+            let task_tx = task_tx_for_results;
+            let pending_tasks = pending_tasks_clone;
+            let finish_notify = finish_notify_clone;
             tokio::spawn(async move {
                 let mut result_rx = result_rx;
                 // 结果消费循环：处理已抓取的页面
                 while let Some(result) = result_rx.recv().await {
+                    pending_tasks.fetch_sub(1, Ordering::SeqCst);
+                    if pending_tasks.load(Ordering::SeqCst) == 0 {
+                        finish_notify.notify_waiters();
+                    }
                     match result {
                         CrawlResult::Success(page) => {
                             // 保存页面到存储
@@ -151,9 +163,11 @@ impl Crawler {
                                             // 创建新任务
                                             let new_task =
                                                 CrawlTask::new(link_url, page.depth + 1);
+                                            pending_tasks.fetch_add(1, Ordering::SeqCst);
 
                                             // 发送到任务队列
                                             if let Err(e) = task_tx.send(new_task).await {
+                                                pending_tasks.fetch_sub(1, Ordering::SeqCst);
                                                 tracing::debug!(
                                                     "任务入队失败（队列可能已满）: {}",
                                                     e
@@ -166,6 +180,8 @@ impl Crawler {
                                                 let mut stats = stats_clone.write().await;
                                                 stats.links_queued += 1;
                                             }
+                                        } else {
+                                            // 重复链接已跳过
                                         }
                                     }
                                 }
@@ -181,6 +197,9 @@ impl Crawler {
             })
         };
 
+        // 关闭当前作用域的任务发送端，避免主循环无限等待
+        drop(task_tx);
+
         // 使用信号量限制并发数
         let semaphore = Arc::new(tokio::sync::Semaphore::new(
             self.config.max_concurrency,
@@ -188,7 +207,16 @@ impl Crawler {
 
         // 主循环：处理任务队列，生成抓取任务
         let mut task_count = 0;
-        while let Ok(permit) = semaphore.clone().acquire_owned().await {
+        loop {
+            if pending_tasks.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
+
             // 检查是否达到最大页面数限制
             if self.config.max_pages > 0 {
                 let stats = self.stats.read().await;
@@ -198,8 +226,18 @@ impl Crawler {
                 }
             }
 
-            // 从任务队列取任务
-            let task = match task_rx.recv().await {
+            let task = tokio::select! {
+                maybe_task = task_rx.recv() => maybe_task,
+                _ = finish_notify.notified() => {
+                    if pending_tasks.load(Ordering::SeqCst) == 0 {
+                        None
+                    } else {
+                        continue;
+                    }
+                }
+            };
+
+            let task = match task {
                 Some(t) => t,
                 None => {
                     // 任务队列已关闭，没有更多任务
@@ -210,23 +248,21 @@ impl Crawler {
 
             task_count += 1;
 
+            // 增加抓取计数，避免 max_pages 检查竞争条件
+            {
+                let mut stats = self.stats.write().await;
+                stats.pages_fetched += 1;
+            }
+
             // 克隆必要的 Arc 供异步任务使用
             let fetcher = Arc::clone(&self.fetcher);
             let filter = Arc::clone(&self.filter);
             let result_tx = result_tx.clone();
-            let stats = Arc::clone(&self.stats);
 
             // 启动抓取任务
             tokio::spawn(async move {
-                // 更新已抓取计数
-                {
-                    let mut s = stats.write().await;
-                    s.pages_fetched += 1;
-                }
-
                 // 执行抓取
-                let crawl_result =
-                    Self::process_task(task, fetcher, filter).await;
+                let crawl_result = Self::process_task(task, fetcher, filter).await;
 
                 // 发送结果到结果通道
                 let _ = result_tx.send(crawl_result).await;
@@ -248,9 +284,6 @@ impl Crawler {
                 tracing::debug!("已处理 {} 个任务", task_count);
             }
         }
-
-        // 关闭任务发送端，等待所有任务完成
-        drop(task_tx);
 
         // 关闭结果发送端
         drop(result_tx);

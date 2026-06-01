@@ -55,11 +55,11 @@ pub struct CrawlerConfig {
     pub seeds: Vec<String>,
 
     /// 最大爬取深度
-    #[arg(short, long, default_value = "2", help = "最大爬取深度")]
+    #[arg(short = 'd', long, default_value = "2", help = "最大爬取深度")]
     pub max_depth: u32,
 
     /// 最大并发请求数
-    #[arg(short, long, default_value = "10", help = "最大并发请求数")]
+    #[arg(short = 'c', long, default_value = "10", help = "最大并发请求数")]
     pub max_concurrency: usize,
 
     /// 请求超时（秒）

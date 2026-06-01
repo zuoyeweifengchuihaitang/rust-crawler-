@@ -5,6 +5,7 @@
 
 use crate::models::Page;
 use async_trait::async_trait;
+use rusqlite::params;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -101,30 +102,76 @@ impl Storage for JsonStorage {
 
 /// CSV 存储实现
 ///
-/// 将页面数据保存为 CSV 格式。
+/// 将页面数据保存为 CSV 格式，每行一个页面。
+/// 链接信息以 JSON 数组形式存储在 links 列中。
 pub struct CsvStorage {
     #[allow(dead_code)]
     path: std::path::PathBuf,
-    // TODO: 添加 CSV writer
+    writer: std::sync::Mutex<csv::Writer<BufWriter<File>>>,
 }
 
 impl CsvStorage {
     /// 创建新的 CSV 存储
+    ///
+    /// 创建 CSV 文件并写入表头。
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let path = path.as_ref().to_path_buf();
-        Ok(Self { path })
+
+        // 创建文件
+        let file = File::create(&path)?;
+        let buf_writer = BufWriter::new(file);
+        let mut writer = csv::Writer::from_writer(buf_writer);
+
+        // 写入表头
+        writer.write_record([
+            "url",
+            "title",
+            "content",
+            "status_code",
+            "depth",
+            "links_json",
+            "fetch_duration_ms",
+            "crawled_at",
+        ])?;
+        writer.flush()?;
+
+        Ok(Self {
+            path,
+            writer: std::sync::Mutex::new(writer),
+        })
     }
 }
 
 #[async_trait]
 impl Storage for CsvStorage {
-    async fn save_page(&self, _page: &Page) -> Result<(), StorageError> {
-        // TODO: 实现 CSV 写入
+    async fn save_page(&self, page: &Page) -> Result<(), StorageError> {
+        // 将链接序列化为 JSON
+        let links_json = serde_json::to_string(&page.links)?;
+
+        // 使用 std::sync::Mutex 保护 writer，lock 后立即完成同步写入
+        let mut writer = self.writer.lock().unwrap();
+        writer.write_record([
+            &page.url,
+            page.title.as_deref().unwrap_or(""),
+            page.content.as_deref().unwrap_or(""),
+            &page.status_code.to_string(),
+            &page.depth.to_string(),
+            &links_json,
+            &page.fetch_duration_ms.to_string(),
+            &page
+                .crawled_at
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string(),
+        ])?;
+
         Ok(())
     }
 
     async fn close(&self) -> Result<(), StorageError> {
-        // TODO: 刷新缓冲区
+        let mut writer = self.writer.lock().unwrap();
+        writer.flush()?;
         Ok(())
     }
 }
@@ -132,30 +179,100 @@ impl Storage for CsvStorage {
 /// SQLite 存储实现
 ///
 /// 将页面数据保存到 SQLite 数据库。
+/// 使用两张表：pages（页面信息）和 links（链接信息）。
 pub struct SqliteStorage {
     #[allow(dead_code)]
     path: std::path::PathBuf,
-    // TODO: 添加数据库连接
+    conn: std::sync::Mutex<rusqlite::Connection>,
 }
 
 impl SqliteStorage {
     /// 创建新的 SQLite 存储
+    ///
+    /// 创建数据库文件并初始化表结构。
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let path = path.as_ref().to_path_buf();
-        // TODO: 初始化数据库表
-        Ok(Self { path })
+        let conn = rusqlite::Connection::open(&path)?;
+
+        // 初始化 pages 表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pages (
+                url TEXT PRIMARY KEY,
+                title TEXT,
+                content TEXT,
+                status_code INTEGER,
+                depth INTEGER,
+                fetch_duration_ms INTEGER,
+                crawled_at INTEGER
+            )",
+            [],
+        )?;
+
+        // 初始化 links 表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                page_url TEXT NOT NULL,
+                link_text TEXT,
+                link_url TEXT NOT NULL,
+                is_internal INTEGER,
+                FOREIGN KEY (page_url) REFERENCES pages(url)
+            )",
+            [],
+        )?;
+
+        Ok(Self {
+            path,
+            conn: std::sync::Mutex::new(conn),
+        })
     }
 }
 
 #[async_trait]
 impl Storage for SqliteStorage {
-    async fn save_page(&self, _page: &Page) -> Result<(), StorageError> {
-        // TODO: 实现 SQLite 插入
+    async fn save_page(&self, page: &Page) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+
+        // 插入页面信息
+        conn.execute(
+            "INSERT OR REPLACE INTO pages
+             (url, title, content, status_code, depth, fetch_duration_ms, crawled_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &page.url,
+                page.title.as_deref(),
+                page.content.as_deref(),
+                page.status_code,
+                page.depth,
+                page.fetch_duration_ms,
+                page.crawled_at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            ],
+        )?;
+
+        // 插入该页面的所有链接
+        for link in &page.links {
+            conn.execute(
+                "INSERT INTO links (page_url, link_text, link_url, is_internal)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    &page.url,
+                    &link.text,
+                    &link.url,
+                    link.is_internal as i32,
+                ],
+            )?;
+        }
+
         Ok(())
     }
 
     async fn close(&self) -> Result<(), StorageError> {
-        // TODO: 关闭数据库连接
+        // SQLite 在 drop Connection 时会自动关闭，这里额外执行 VACUUM 优化
+        let conn = self.conn.lock().unwrap();
+        conn.execute("VACUUM", [])?;
         Ok(())
     }
 }
