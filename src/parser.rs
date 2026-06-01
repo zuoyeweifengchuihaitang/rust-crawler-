@@ -9,16 +9,7 @@ use url::Url;
 
 /// 噪声标签：这些标签及其子元素的内容会被完全忽略
 const NOISE_TAGS: &[&str] = &[
-    "script",
-    "style",
-    "noscript",
-    "iframe",
-    "svg",
-    "canvas",
-    "nav",
-    "footer",
-    "aside",
-    "header",
+    "script", "style", "noscript", "iframe", "svg", "canvas", "nav", "footer", "aside", "header",
     "menu",
 ];
 
@@ -204,10 +195,7 @@ impl HtmlParser {
         let tag_name = element.value().name();
 
         // 只考虑容器级标签作为候选
-        let is_container = matches!(
-            tag_name,
-            "div" | "section" | "td" | "li" | "blockquote"
-        );
+        let is_container = matches!(tag_name, "div" | "section" | "td" | "li" | "blockquote");
 
         if is_container {
             let stats = Self::calc_element_stats(element);
@@ -249,7 +237,12 @@ impl HtmlParser {
         let mut tag_count = 0;
         let mut link_text_parts = Vec::new();
 
-        Self::calc_stats_recursive(element, &mut text_parts, &mut tag_count, &mut link_text_parts);
+        Self::calc_stats_recursive(
+            element,
+            &mut text_parts,
+            &mut tag_count,
+            &mut link_text_parts,
+        );
 
         let text = Self::join_and_clean(&text_parts);
         let link_text = Self::join_and_clean(&link_text_parts);
@@ -520,8 +513,8 @@ mod tests {
 
         let content = page.content.expect("应该有内容");
         assert!(content.contains("real content"));
-        assert!(!content.contains("Home"));   // nav 内文本被过滤
-        assert!(!content.contains("About"));  // nav 内文本被过滤
+        assert!(!content.contains("Home")); // nav 内文本被过滤
+        assert!(!content.contains("About")); // nav 内文本被过滤
     }
 
     #[test]
@@ -586,8 +579,8 @@ mod tests {
 
         let content = page.content.expect("应该有内容");
         assert!(content.contains("Real article text"));
-        assert!(!content.contains("Home"));           // site-navigation
-        assert!(!content.contains("Contact"));        // site-navigation
+        assert!(!content.contains("Home")); // site-navigation
+        assert!(!content.contains("Contact")); // site-navigation
         assert!(!content.contains("Buy our products")); // advertisement-banner
     }
 
@@ -612,8 +605,8 @@ mod tests {
 
         let content = page.content.expect("应该有内容");
         assert!(content.contains("actual content"));
-        assert!(!content.contains("cookies"));    // cookie-consent-banner
-        assert!(!content.contains("Trending"));   // sidebar-widget
+        assert!(!content.contains("cookies")); // cookie-consent-banner
+        assert!(!content.contains("Trending")); // sidebar-widget
     }
 
     #[test]
