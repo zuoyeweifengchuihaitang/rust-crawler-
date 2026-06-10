@@ -15,21 +15,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // 2. 解析命令行参数
-    let config = CrawlerConfig::parse();
+    let mut config = CrawlerConfig::parse();
 
-    // 3. 验证配置
+    // 3. 展开分页模板
+    if let (Some(template), Some(range)) = (&config.page_template.clone(), &config.page_range.clone()) {
+        if let Some((start_str, end_str)) = range.split_once('-') {
+            if let (Ok(start), Ok(end)) = (start_str.parse::<u32>(), end_str.parse::<u32>()) {
+                if start <= end && end <= 9999 {
+                    for page in start..=end {
+                        let url = template.replace("{page}", &page.to_string());
+                        config.seeds.push(url);
+                    }
+                    info!("分页模板展开: {} ~ {} 页, 共 {} 个 URL", start, end, end - start + 1);
+                }
+            }
+        }
+    }
+
+    // 4. 验证配置
     if let Err(e) = config.validate() {
         eprintln!("配置错误: {}", e);
         std::process::exit(1);
     }
 
-    // 4. 设置日志级别
+    // 5. 设置日志级别
     if config.verbose {
         // 已在环境变量中设置，这里可以调整
         info!("启用详细日志模式");
     }
 
-    // 5. 打印配置信息
+    // 6. 打印配置信息
     print_config(&config);
 
     // 6. 初始化进度条
@@ -133,8 +148,21 @@ fn print_config(config: &CrawlerConfig) {
         println!("最大页面数:  {}", config.max_pages);
     }
 
+    if !config.include_patterns.is_empty() {
+        println!("包含模式:    {}", config.include_patterns.join(", "));
+    }
+
+    if !config.exclude_patterns.is_empty() {
+        println!("排除模式:    {}", config.exclude_patterns.join(", "));
+    }
+
     if config.respect_robots {
         println!("遵循 robots.txt: 是");
+    }
+
+    if config.page_template.is_some() {
+        println!("分页模板:    {}", config.page_template.as_ref().unwrap());
+        println!("页码范围:    {}", config.page_range.as_ref().unwrap_or(&"-".to_string()));
     }
 
     println!("{}", "=".repeat(50));

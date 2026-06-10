@@ -110,11 +110,6 @@ impl Fetcher {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        // 读取响应体
-        let body = response.text().await?;
-
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         // 检查状态码
         if !status.is_success() {
             return Err(FetcherError::BadStatus(status.as_u16()));
@@ -126,6 +121,77 @@ impl Fetcher {
                 return Err(FetcherError::NotHtml(Some(ct.clone())));
             }
         }
+
+        // 读取响应体原始字节（不依赖 .text() 的 UTF-8 默认假设）
+        let body_bytes = response.bytes().await?;
+
+        // 从 Content-Type 中提取 charset，并据此解码
+        let charset = content_type
+            .as_ref()
+            .and_then(|ct| {
+                ct.split(';').find_map(|part| {
+                    let part = part.trim();
+                    let lower = part.to_lowercase();
+                    if lower.starts_with("charset=") {
+                        Some(part[8..].trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+            });
+
+        let body = if let Some(ref cs) = charset {
+            let cs_lower = cs.to_lowercase();
+            match cs_lower.as_str() {
+                "utf-8" | "utf8" => String::from_utf8_lossy(&body_bytes).into_owned(),
+                "gbk" | "gb2312" | "gb18030" | "gbk2312" => {
+                    let (decoded, _had_errors, _replaced) = encoding_rs::GBK.decode(&body_bytes);
+                    decoded.into_owned()
+                }
+                "big5" | "big5-hkscs" => {
+                    let (decoded, _had_errors, _replaced) = encoding_rs::BIG5.decode(&body_bytes);
+                    decoded.into_owned()
+                }
+                "shift_jis" | "euc-jp" | "iso-2022-jp" => {
+                    let (decoded, _had_errors, _replaced) =
+                        encoding_rs::SHIFT_JIS.decode(&body_bytes);
+                    decoded.into_owned()
+                }
+                "euc-kr" | "iso-2022-kr" => {
+                    let (decoded, _had_errors, _replaced) =
+                        encoding_rs::EUC_KR.decode(&body_bytes);
+                    decoded.into_owned()
+                }
+                "iso-8859-1" | "latin1" => {
+                    let (decoded, _had_errors, _replaced) =
+                        encoding_rs::WINDOWS_1252.decode(&body_bytes);
+                    decoded.into_owned()
+                }
+                _ => {
+                    // 未知编码，先试 UTF-8，失败则回退 GBK
+                    if let Ok(s) = String::from_utf8(body_bytes.to_vec()) {
+                        s
+                    } else {
+                        let (decoded, _had_errors, _replaced) =
+                            encoding_rs::GBK.decode(&body_bytes);
+                        decoded.into_owned()
+                    }
+                }
+            }
+        } else {
+            // 无 charset 信息：先试 UTF-8，若含大量替换字符则回退 GBK
+            let utf8_result = String::from_utf8_lossy(&body_bytes).into_owned();
+            // 如果替换字符占比 > 5%，尝试 GBK 解码
+            let replacement_count = utf8_result.chars().filter(|&c| c == '\u{FFFD}').count();
+            if replacement_count as f64 / utf8_result.len().max(1) as f64 > 0.05 {
+                let (decoded, _had_errors, _replaced) = encoding_rs::GBK.decode(&body_bytes);
+                decoded.into_owned()
+            } else {
+                utf8_result
+            }
+        };
+
+        let duration_ms = start.elapsed().as_millis() as u64;
 
         // 构建结果
         let result = FetchResult {

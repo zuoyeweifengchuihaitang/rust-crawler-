@@ -5,12 +5,17 @@
 .vscode/
 *.swp
 *.swo
-
-# 爬虫输出文件
+.claude/
+.codegraph/
+.reasonix/
+.serena/
+# 爬虫输出目录和文件
+crawl_outputs/
+my_crawl.json
 *.db
 *.json
 *.csv
-test_output*
-test_*.json
-test_*.csv
-test_*.db
+__pycache__/
+*.pyc
+*.log
+c/

@@ -413,8 +413,6 @@ impl HtmlParser {
 
         links
     }
-
-    /// 判断链接是否是内部链接
     fn is_internal_link(base: &Url, target: &Url) -> bool {
         match (base.host_str(), target.host_str()) {
             (Some(base_host), Some(target_host)) => base_host == target_host,

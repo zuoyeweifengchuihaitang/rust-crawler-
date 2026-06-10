@@ -12,7 +12,7 @@ repository = "https://github.com/yourusername/rust-crawler"
 tokio = { version = "1.43", features = ["full"] }
 
 # HTTP 客户端
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "deflate"] }
 
 # HTML 解析
 scraper = "0.23"
@@ -39,6 +39,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # URL 处理
 url = "2.5"
+
+# 字符编码检测与转换
+encoding_rs = "0.8"
 
 # 错误处理
 thiserror = "2.0"

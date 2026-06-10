@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust Crawler 控制台</title>
+<script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #21262d;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d29922;
+    --danger: #f85149;
+    --radius: 8px;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+  }
+  /* ===== Header ===== */
+  .header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; display: flex; align-items: center; gap: 12px;
+  }
+  .header h1 {
+    font-size: 16px;
+    background: linear-gradient(135deg, #58a6ff, #bc8cff);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .header .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: var(--surface2); color: var(--text2);
+  }
+  .header .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    margin-left: auto;
+  }
+  .status-dot.idle { background: #8b949e; }
+  .status-dot.running { background: #d29922; animation: pulse 1s infinite; }
+  .status-dot.done { background: #3fb950; }
+  .status-dot.error { background: #f85149; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* ===== Layout ===== */
+  .app { display: flex; height: calc(100vh - 50px); }
+
+  /* ===== Left Panel ===== */
+  .panel-left {
+    width: 360px; min-width: 360px; border-right: 1px solid var(--border);
+    overflow-y: auto; background: var(--surface); padding: 16px;
+  }
+  .panel-left h2 {
+    font-size: 14px; margin-bottom: 12px; color: var(--text2);
+  }
+  .form-group { margin-bottom: 12px; }
+  .form-group label {
+    display: block; font-size: 12px; color: var(--text2); margin-bottom: 4px;
+  }
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%; padding: 7px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); font-size: 13px;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .form-group textarea { resize: vertical; min-height: 36px; font-family: inherit; }
+  .form-row { display: flex; gap: 10px; }
+  .form-row .form-group { flex: 1; }
+  .form-hint { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .btn-crawl {
+    width: 100%; padding: 10px; border: none; border-radius: 6px;
+    background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: all .2s; margin-top: 4px;
+  }
+  .btn-crawl:hover { filter: brightness(1.15); }
+  .btn-crawl:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+  .btn-crawl.running { background: var(--accent3); animation: pulse 1s infinite; }
+
+  /* ===== Right Panel ===== */
+  .panel-right {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .tabs {
+    display: flex; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  .tabs .tab {
+    padding: 10px 20px; cursor: pointer; font-size: 13px;
+    color: var(--text2); border-bottom: 2px solid transparent;
+    transition: all .2s; user-select: none;
+  }
+  .tabs .tab:hover { color: var(--text); }
+  .tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab .count {
+    display: inline-block; font-size: 10px; padding: 0 6px; border-radius: 8px;
+    background: var(--surface2); margin-left: 4px;
+  }
+
+  .tab-content { flex: 1; overflow: hidden; display: none; }
+  .tab-content.active { display: flex; flex-direction: column; }
+
+  /* ===== Logs ===== */
+  .logs { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; }
+  .logs .line { padding: 1px 0; color: var(--text2); white-space: pre-wrap; word-break: break-all; }
+  .logs .line.info { color: var(--text2); }
+  .logs .line.ok { color: var(--accent2); }
+  .logs .line.warn { color: var(--accent3); }
+  .logs .line.err { color: var(--danger); }
+  .logs .line.cmd { color: var(--accent); font-weight: bold; }
+  .logs .line.stat { color: var(--accent); }
+
+  /* ===== Results ===== */
+  .results { flex: 1; overflow-y: auto; padding: 16px; }
+  .results-empty {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%; flex-direction: column; color: var(--text2);
+  }
+  .results-empty .icon { font-size: 48px; margin-bottom: 12px; opacity: .3; }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px; margin-bottom: 20px;
+  }
+  .stat-card {
+    background: var(--surface2); border-radius: var(--radius);
+    padding: 12px; text-align: center;
+  }
+  .stat-card .val { font-size: 22px; font-weight: 700; }
+  .stat-card .lbl { font-size: 11px; color: var(--text2); margin-top: 4px; }
+  .stat-card .val.blue { color: var(--accent); }
+  .stat-card .val.green { color: var(--accent2); }
+  .stat-card .val.yellow { color: var(--accent3); }
+  .stat-card .val.red { color: var(--danger); }
+
+  /* Results layout */
+  .results-main {
+    display: grid; grid-template-columns: 280px 1fr; gap: 12px;
+    min-height: 400px;
+  }
+  .page-list { border: 1px solid var(--border); border-radius: var(--radius); overflow-y: auto; max-height: 500px; }
+  .page-item {
+    padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer;
+    transition: all .1s; font-size: 12px;
+  }
+  .page-item:last-child { border-bottom: none; }
+  .page-item:hover { background: var(--surface2); }
+  .page-item.active { background: var(--surface2); border-left: 3px solid var(--accent); }
+  .page-item .pi-title { font-weight: 500; font-size: 13px; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page-item .pi-url { color: var(--text2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page-item .pi-meta { display: flex; gap: 6px; font-size: 10px; color: var(--text2); margin-top: 4px; }
+  .page-detail { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow-y: auto; max-height: 500px; }
+  .page-detail .url { color: var(--accent); font-size: 12px; word-break: break-all; margin-bottom: 8px; }
+  .page-detail .title { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+  .page-detail .meta { display: flex; gap: 12px; font-size: 12px; color: var(--text2); margin-bottom: 12px; flex-wrap: wrap; }
+  .page-detail .content { font-size: 13px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 12px; }
+  .page-detail .links-list { list-style: none; }
+  .page-detail .links-list li { padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--border); }
+  .page-detail .links-list .ll-text { color: var(--accent); }
+  .page-detail .links-list .ll-url { color: var(--text2); font-size: 11px; word-break: break-all; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
+  .badge-internal { background: #0a2e1a; color: var(--accent2); }
+  .badge-external { background: #2e0a0a; color: var(--danger); }
+
+  /* ===== Graph ===== */
+  #graph-container { width: 100%; height: 100%; background: var(--bg); }
+
+  /* ===== Scrollbar ===== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🕷️ Rust Crawler 控制台</h1>
+  <span class="badge">v0.1</span>
+  <span class="status-dot idle" id="statusDot"></span>
+  <span style="font-size:12px;color:var(--text2)" id="statusText">就绪</span>
+</div>
+
+<div class="app">
+  <!-- Left Panel: Controls -->
+  <div class="panel-left" id="ctrlPanel">
+    <h2>⚙️ 爬虫配置</h2>
+
+    <div class="form-group">
+      <label>种子 URL *</label>
+      <textarea id="inputSeeds" rows="2" placeholder="每行一个 URL">https://example.com/</textarea>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>最大深度</label>
+        <input type="number" id="inputDepth" value="2" min="0" max="20">
+      </div>
+      <div class="form-group">
+        <label>并发数</label>
+        <input type="number" id="inputConcurrency" value="5" min="1" max="50">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>最大页面（0=不限）</label>
+        <input type="number" id="inputMaxPages" value="50" min="0" placeholder="0=不限">
+      </div>
+      <div class="form-group">
+        <label>超时 (秒)</label>
+        <input type="number" id="inputTimeout" value="30" min="5">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>输出格式</label>
+      <select id="inputFormat">
+        <option value="json">JSON</option>
+        <option value="csv">CSV</option>
+        <option value="sqlite">SQLite</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>允许的域名（逗号分隔，留空则不限制）</label>
+      <input type="text" id="inputDomains" placeholder="例如: rust-lang.org, example.com">
+    </div>
+
+    <div class="form-group">
+      <label>包含的 URL 模式（逗号分隔，只爬取匹配的链接）</label>
+      <input type="text" id="inputInclude" placeholder="例如: /house/, /zu/, i3">
+    </div>
+
+    <div class="form-group">
+      <label>排除的 URL 模式（逗号分隔）</label>
+      <input type="text" id="inputExclude" placeholder="例如: /blog/, /old/">
+    </div>
+
+    <div style="display:flex;gap:16px;margin-bottom:12px;">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+        <input type="checkbox" id="inputRobots"> 遵守 robots.txt
+      </label>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>User-Agent</label>
+        <input type="text" id="inputUA" placeholder="默认: rust-crawler/0.1.0">
+      </div>
+      <div class="form-group" style="display:flex;align-items:flex-end;">
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="inputRobots"> 遵守 robots.txt
+        </label>
+      </div>
+    </div>
+
+    <button class="btn-crawl" id="btnCrawl" onclick="startCrawl()">🚀 开始爬取</button>
+  </div>
+
+  <!-- Right Panel: Results -->
+  <div class="panel-right">
+    <div class="tabs">
+      <div class="tab active" data-tab="logs" onclick="switchTab('logs')">📋 运行日志</div>
+      <div class="tab" data-tab="results" onclick="switchTab('results')">📊 爬取结果 <span class="count" id="resultCount">0</span></div>
+      <div class="tab" data-tab="graph" onclick="switchTab('graph')">🔗 关系图</div>
+    </div>
+
+    <!-- Logs Tab -->
+    <div class="tab-content active" id="tabLogs">
+      <div class="logs" id="logContainer">
+        <div class="line info">💡 填写左侧参数，点击「开始爬取」启动爬虫</div>
+      </div>
+    </div>
+
+    <!-- Results Tab -->
+    <div class="tab-content" id="tabResults">
+      <div class="results" id="resultContainer">
+        <div class="results-empty" id="noResult">
+          <div class="icon">📊</div>
+          <div>爬取完成后结果会显示在这里</div>
+        </div>
+        <div id="resultContent" style="display:none">
+          <div class="stats-grid" id="statsGrid"></div>
+          <div class="results-main">
+            <div class="page-list" id="pageList"></div>
+            <div class="page-detail" id="pageDetail">
+              <div style="color:var(--text2);text-align:center;padding:20px;">选择左侧一个页面查看详情</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Graph Tab -->
+    <div class="tab-content" id="tabGraph">
+      <div id="graph-container"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== State =====
+let currentTaskId = null;
+let pollInterval = null;
+let currentData = [];
+let graphNetwork = null;
+const API_BASE = '';
+
+// ===== Logging =====
+function addLog(msg, cls = 'info') {
+  const container = document.getElementById('logContainer');
+  const div = document.createElement('div');
+  div.className = 'line ' + cls;
+  div.textContent = msg;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+// ===== Tab Switching =====
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById(tab === 'logs' ? 'tabLogs' : tab === 'results' ? 'tabResults' : 'tabGraph').classList.add('active');
+
+  // 延迟渲染关系图（避免 vis-network 初始化阻塞结果展示）
+  if (tab === 'graph') {
+    if (window._graphNeedsRender && currentData.length > 0) {
+      window._graphNeedsRender = false;
+      renderGraph(currentData);
+    }
+    if (graphNetwork) setTimeout(() => graphNetwork.fit(), 200);
+  }
+}
+
+// ===== Start Crawl =====
+async function startCrawl() {
+  const btn = document.getElementById('btnCrawl');
+
+  // 收集参数
+  const seeds = document.getElementById('inputSeeds').value.trim().split('\n').filter(s => s.trim());
+  if (seeds.length === 0) { alert('请至少输入一个种子 URL'); return; }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 爬取中...';
+  btn.classList.add('running');
+  document.getElementById('statusDot').className = 'status-dot running';
+  document.getElementById('statusText').textContent = '运行中';
+
+  // 重置状态
+  document.getElementById('logContainer').innerHTML = '';
+  document.getElementById('resultContent').style.display = 'none';
+  document.getElementById('noResult').style.display = 'flex';
+  document.getElementById('resultCount').textContent = '0';
+  window._pollCount = 0;
+  window._slowPoll = false;
+  window._graphNeedsRender = false;
+
+  const params = {
+    seeds: seeds,
+    max_depth: parseInt(document.getElementById('inputDepth').value) || 2,
+    max_concurrency: parseInt(document.getElementById('inputConcurrency').value) || 10,
+    max_pages: parseInt(document.getElementById('inputMaxPages').value) || 0,
+    timeout_secs: parseInt(document.getElementById('inputTimeout').value) || 30,
+    format: document.getElementById('inputFormat').value,
+    allowed_domains: document.getElementById('inputDomains').value.trim(),
+    include_patterns: document.getElementById('inputInclude').value.trim(),
+    exclude_patterns: document.getElementById('inputExclude').value.trim(),
+    user_agent: document.getElementById('inputUA').value.trim(),
+    respect_robots: document.getElementById('inputRobots').checked,
+  };
+
+  addLog('🚀 正在提交爬虫任务...', 'cmd');
+  addLog('📌 参数: ' + JSON.stringify(params, null, 2), 'info');
+  addLog('⏳ 等待服务器响应...', 'info');
+
+  try {
+    const resp = await fetch(API_BASE + '/api/crawl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await resp.json();
+    currentTaskId = data.task_id;
+    addLog('✅ 任务已提交，ID: ' + currentTaskId, 'ok');
+    addLog('⏳ 爬虫启动中...', 'info');
+
+    // 开始轮询
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(() => pollTask(currentTaskId), 800);
+  } catch (err) {
+    addLog('❌ 提交失败: ' + err.message, 'err');
+    resetButton();
+  }
+}
+
+// ===== Poll Task Status =====
+async function pollTask(taskId) {
+  try {
+    const resp = await fetch(API_BASE + '/api/crawl/' + taskId);
+    const data = await resp.json();
+
+    // 更新日志
+    const logContainer = document.getElementById('logContainer');
+    const prevCount = logContainer.children.length;
+
+    if (data.logs) {
+      data.logs.forEach((log, i) => {
+        if (i >= prevCount - 1) {
+          let cls = 'info';
+          if (log.startsWith('✅')) cls = 'ok';
+          else if (log.startsWith('❌')) cls = 'err';
+          else if (log.startsWith('⚠️')) cls = 'warn';
+          else if (log.startsWith('🚀')) cls = 'cmd';
+          else if (log.startsWith('📊')) cls = 'stat';
+          addLog(log, cls);
+        }
+      });
+    }
+
+    if (data.status === 'done') {
+      clearInterval(pollInterval);
+      pollInterval = null;
+      document.getElementById('statusDot').className = 'status-dot done';
+      document.getElementById('statusText').textContent = '完成';
+
+      if (data.result && data.result.length > 0) {
+        try {
+          displayResults(data.result, data.stats);
+          switchTab('results');
+          addLog('✅ 结果已加载完成，共 ' + data.result.length + ' 页', 'ok');
+        } catch (e) {
+          addLog('⚠️ 结果渲染遇到问题: ' + e.message, 'warn');
+          switchTab('logs');
+        }
+      } else if (data.stats && data.stats.total > 0) {
+        addLog('📊 爬取完成，但结果数据为空（可能是 CSV/SQLite 格式）', 'info');
+        addLog('📁 文件已保存到 crawl_outputs/ 目录', 'info');
+      } else {
+        addLog('⚠️ 没有爬取到任何数据', 'warn');
+      }
+      resetButton();
+    } else if (data.status === 'error') {
+      clearInterval(pollInterval);
+      pollInterval = null;
+      addLog('❌ 爬取失败，请检查参数和网络', 'err');
+      document.getElementById('statusDot').className = 'status-dot error';
+      document.getElementById('statusText').textContent = '失败';
+      resetButton();
+    }
+
+    // 超时保护：300 次轮询 (~4 分钟) 后降频到 5 秒一次，不再弹警告
+    if (!window._pollCount) window._pollCount = 0;
+    window._pollCount++;
+    if (window._pollCount > 300 && !window._slowPoll && ['running','queued'].includes(data.status)) {
+      window._slowPoll = true;
+      resetButton();
+      clearInterval(pollInterval);
+      pollInterval = setInterval(() => pollTask(taskId), 5000);
+    }
+  } catch (err) {
+    // 静默处理轮询错误
+  }
+}
+
+function resetButton() {
+  const btn = document.getElementById('btnCrawl');
+  btn.disabled = false;
+  btn.textContent = '🚀 开始爬取';
+  btn.classList.remove('running');
+}
+
+// ===== Display Results =====
+function displayResults(data, stats) {
+  currentData = data;
+  document.getElementById('noResult').style.display = 'none';
+  document.getElementById('resultContent').style.display = 'block';
+  document.getElementById('resultCount').textContent = data.length;
+
+  // Stats
+  const s = stats || {};
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat-card"><div class="val blue">${s.total || data.length}</div><div class="lbl">抓取页面</div></div>
+    <div class="stat-card"><div class="val green">${s.success || '-'}</div><div class="lbl">成功</div></div>
+    <div class="stat-card"><div class="val red">${s.failed || 0}</div><div class="lbl">失败</div></div>
+    <div class="stat-card"><div class="val yellow">${s.total_links || '-'}</div><div class="lbl">发现链接</div></div>
+    <div class="stat-card"><div class="val blue">${s.elapsed_sec ? s.elapsed_sec + 's' : '-'}</div><div class="lbl">总耗时</div></div>
+    <div class="stat-card"><div class="val">${s.max_depth || '-'}</div><div class="lbl">最大深度</div></div>
+  `;
+
+  // Page list
+  const listEl = document.getElementById('pageList');
+  listEl.innerHTML = data.map((p, i) => `
+    <div class="page-item" data-idx="${i}" onclick="selectPage(${i})">
+      <div class="pi-title">${p.title || '(无标题)'}</div>
+      <div class="pi-url">${p.url}</div>
+      <div class="pi-meta">
+        <span>深度 ${p.depth}</span>
+        <span>${p.status_code}</span>
+        <span>${p.links ? p.links.length : 0} 链接</span>
+      </div>
+    </div>
+  `).join('');
+
+  // Select first
+  if (data.length > 0) selectPage(0);
+
+  // 标记需要渲染关系图（延迟渲染，点击标签时才执行）
+  window._graphNeedsRender = true;
+}
+
+function selectPage(idx) {
+  const p = currentData[idx];
+  if (!p) return;
+  document.querySelectorAll('.page-item').forEach(el => el.classList.remove('active'));
+  const item = document.querySelector(`.page-item[data-idx="${idx}"]`);
+  if (item) item.classList.add('active');
+
+  const linksHtml = p.links && p.links.length > 0
+    ? p.links.map(l => `<li>
+        <span class="ll-text">${l.text || '(链接)'}</span>
+        <span class="badge ${l.is_internal ? 'badge-internal' : 'badge-external'}">${l.is_internal ? '站内' : '外部'}</span>
+        <div class="ll-url">${l.url}</div>
+      </li>`).join('')
+    : '<li style="color:var(--text2)">无链接</li>';
+
+  document.getElementById('pageDetail').innerHTML = `
+    <div class="url">${p.url}</div>
+    <div class="title">${p.title || '(无标题)'}</div>
+    <div class="meta">
+      <span>📏 深度 ${p.depth}</span>
+      <span>📊 ${p.status_code}</span>
+      <span>⏱ ${p.fetch_duration_ms || '-'}ms</span>
+      <span>🔗 ${p.links ? p.links.length : 0} 个链接</span>
+    </div>
+    <div class="content">${p.content || '(无正文内容)'}</div>
+    <h3 style="font-size:13px;color:var(--text2);margin-bottom:6px;">🔗 链接列表 (${p.links ? p.links.length : 0})</h3>
+    <ul class="links-list">${linksHtml}</ul>
+  `;
+}
+
+// ===== Graph (限制节点数，避免卡死) =====
+function renderGraph(data) {
+  if (graphNetwork) { graphNetwork.destroy(); graphNetwork = null; }
+
+  const MAX_NODES = 200;
+  const crawledUrls = new Set(data.map(p => p.url));
+  const nodesMap = new Map();
+  const edges = [];
+
+  // 爬到的页面作为主节点
+  data.forEach(p => {
+    let label = p.title || p.url;
+    if (label.length > 25) label = label.slice(0, 22) + '...';
+    nodesMap.set(p.url, {
+      id: p.url, label: label, group: p.depth,
+      value: p.links ? Math.min(p.links.length + 1, 30) : 1,
+      title: p.title + '\n' + p.url,
+    });
+  });
+
+  // 只添加站内链接（is_internal=true 或同域名）到关系图
+  data.forEach(p => {
+    if (!p.links) return;
+    let added = 0;
+    p.links.forEach(l => {
+      if (!l.is_internal) return; // 外部链接不画
+      if (nodesMap.size >= MAX_NODES) return;
+      if (!nodesMap.has(l.url)) {
+        nodesMap.set(l.url, {
+          id: l.url,
+          label: l.url.replace(/^https?:\/\//, '').slice(0, 25),
+          group: 0, value: 1,
+          color: { background: '#30363d', border: '#484f58' },
+          font: { color: '#8b949e', size: 10 },
+        });
+      }
+      edges.push({ from: p.url, to: l.url, color: { color: '#58a6ff66' }, width: 1.5 });
+      added++;
+    });
+  });
+
+  if (nodesMap.size === 0) {
+    document.getElementById('graph-container').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text2);">没有内部链接可展示</div>';
+    return;
+  }
+
+  const options = {
+    nodes: {
+      shape: 'dot', font: { color: '#e6edf3', size: 11 },
+      borderWidth: 2,
+      color: { background: '#58a6ff', border: '#79c0ff', highlight: { background: '#bc8cff', border: '#d2a8ff' } },
+      scaling: { min: 8, max: 30 },
+    },
+    edges: {
+      smooth: { type: 'continuous' },
+      arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+    },
+    physics: {
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: { gravitationalConstant: -60, centralGravity: 0.01, springLength: 150, springConstant: 0.03 },
+      stabilization: { iterations: 100 },
+    },
+    groups: {
+      0: { color: { background: '#58a6ff', border: '#79c0ff' } },
+      1: { color: { background: '#3fb950', border: '#56d364' } },
+      2: { color: { background: '#d29922', border: '#e3b341' } },
+    },
+    interaction: { hover: true, tooltipDelay: 100, navigationButtons: true, keyboard: true },
+  };
+
+  graphNetwork = new vis.Network(
+    document.getElementById('graph-container'),
+    { nodes: new vis.DataSet(Array.from(nodesMap.values())), edges: new vis.DataSet(edges) },
+    options
+  );
+
+  graphNetwork.on('click', function(params) {
+    if (params.nodes.length > 0) {
+      const url = params.nodes[0];
+      const idx = currentData.findIndex(p => p.url === url);
+      if (idx >= 0) {
+        switchTab('results');
+        selectPage(idx);
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>

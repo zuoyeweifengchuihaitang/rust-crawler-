@@ -151,9 +151,6 @@ impl Crawler {
                 // 结果消费循环：处理已抓取的页面
                 while let Some(result) = result_rx.recv().await {
                     pending_tasks.fetch_sub(1, Ordering::SeqCst);
-                    if pending_tasks.load(Ordering::SeqCst) == 0 {
-                        finish_notify.notify_waiters();
-                    }
                     match result {
                         CrawlResult::Success(page) => {
                             // 保存页面到存储
@@ -220,6 +217,11 @@ impl Crawler {
                             let mut stats = stats_clone.write().await;
                             stats.pages_failed += 1;
                         }
+                    }
+
+                    // 延迟通知：确保所有链接处理（可能新增 pending_tasks）完成后再检查
+                    if pending_tasks.load(Ordering::SeqCst) == 0 {
+                        finish_notify.notify_waiters();
                     }
                 }
             })

@@ -48,27 +48,33 @@ pub enum StorageError {
 
 /// JSON 存储实现
 ///
-/// 将页面数据保存为 JSON Lines 格式（每行一个 JSON 对象）。
+/// 将页面数据保存为标准 JSON 数组格式 `[{...}, {...}, ...]`。
 pub struct JsonStorage {
     #[allow(dead_code)]
     path: std::path::PathBuf,
     writer: Arc<Mutex<BufWriter<File>>>,
+    /// 是否尚未写入任何页面（用于逗号分隔）
+    first_page: std::sync::Mutex<bool>,
 }
 
 impl JsonStorage {
     /// 创建新的 JSON 存储
     ///
-    /// 创建一个新的文件，如果文件已存在则覆盖。
+    /// 创建文件并写入数组开头 `[`。
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let path = path.as_ref().to_path_buf();
 
         // 创建文件（如果存在则清空）
         let file = File::create(&path)?;
-        let writer = BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
+        // 写入 JSON 数组起始符
+        writer.write_all(b"[\n")?;
+        writer.flush()?;
 
         Ok(Self {
             path,
             writer: Arc::new(Mutex::new(writer)),
+            first_page: std::sync::Mutex::new(true),
         })
     }
 }
@@ -76,21 +82,31 @@ impl JsonStorage {
 #[async_trait]
 impl Storage for JsonStorage {
     async fn save_page(&self, page: &Page) -> Result<(), StorageError> {
-        // 序列化页面为 JSON
+        // 序列化页面为 JSON（已压缩为单行）
         let json = serde_json::to_string(page)?;
 
-        // 获取写入器的锁并写入
-        // 注意：这会在 async 上下文中短时间阻塞，但 BufWriter 的写入很快，通常不是问题
         let mut writer = self.writer.lock().await;
-        let json_line = format!("{}\n", json);
-        writer.write_all(json_line.as_bytes())?;
+        let mut is_first = self.first_page.lock().unwrap();
+
+        if !*is_first {
+            // 非首条，追加逗号分隔
+            writer.write_all(b",\n")?;
+        }
+        *is_first = false;
+
+        // 写入当前页（缩进 2 空格，保持可读性）
+        writer.write_all(b"  ")?;
+        writer.write_all(json.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
 
         Ok(())
     }
 
     async fn close(&self) -> Result<(), StorageError> {
-        // 刷新缓冲区
+        // 写入数组结束符并刷新
         let mut writer = self.writer.lock().await;
+        writer.write_all(b"]\n")?;
         writer.flush()?;
 
         // 显式 drop 以确保文件被关闭
@@ -353,18 +369,20 @@ mod tests {
 
         // 读取文件内容
         let content = std::fs::read_to_string(&file_path).unwrap();
+
+        // 应该能作为 JSON 数组整体反序列化
+        let pages: Vec<Page> = serde_json::from_str(&content).unwrap();
+        assert_eq!(pages.len(), 2);
+
+        assert_eq!(pages[0].url, "https://example.com/page1");
+        assert_eq!(pages[0].title, Some("Example Page".to_string()));
+
+        assert_eq!(pages[1].url, "https://example.com/page2");
+        assert_eq!(pages[1].title, Some("Another Page".to_string()));
+
+        // 同时验证首行是 [，末行是 ]
         let lines: Vec<&str> = content.lines().collect();
-
-        // 应该有 2 行 JSON
-        assert_eq!(lines.len(), 2);
-
-        // 验证可以反序列化
-        let first_page: Page = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(first_page.url, "https://example.com/page1");
-        assert_eq!(first_page.title, Some("Example Page".to_string()));
-
-        let second_page: Page = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(second_page.url, "https://example.com/page2");
-        assert_eq!(second_page.title, Some("Another Page".to_string()));
+        assert_eq!(lines[0].trim(), "[");
+        assert_eq!(lines.last().map(|s| s.trim()), Some("]"));
     }
 }

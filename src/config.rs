@@ -86,6 +86,18 @@ pub struct CrawlerConfig {
     #[arg(long = "exclude", help = "排除的URL模式，可多次指定")]
     pub exclude_patterns: Vec<String>,
 
+    /// 包含的 URL 模式（子字符串匹配）。设置了此选项后，只有 URL 包含该模式的链接才会被爬取
+    #[arg(long = "include", help = "只爬取URL包含该模式的链接，可多次指定（不设置则不限制）")]
+    pub include_patterns: Vec<String>,
+
+    /// 分页 URL 模板，配合 --page-range 使用。{page} 会被替换为页码
+    #[arg(long = "page-template", help = "分页URL模板，例如 https://sjz.zu.fang.com/i{page}/")]
+    pub page_template: Option<String>,
+
+    /// 分页页码范围，配合 --page-template 使用。格式: 开始-结束 (例如 2-50)
+    #[arg(long = "page-range", help = "页码范围，例如 2-50")]
+    pub page_range: Option<String>,
+
     /// 用户代理字符串
     #[arg(long, default_value = "rust-crawler/0.1.0", help = "User-Agent")]
     pub user_agent: String,
@@ -134,6 +146,9 @@ impl CrawlerConfig {
             delay_ms: 0,
             allowed_domains: vec![],
             exclude_patterns: vec![],
+            include_patterns: vec![],
+            page_template: None,
+            page_range: None,
             user_agent: "rust-crawler/test".to_string(),
             max_pages: 10,
             format: OutputFormat::Json,
@@ -173,7 +188,7 @@ impl CrawlerConfig {
         }
 
         // 检查深度是否合理
-        if self.max_depth > 10 {
+        if self.max_depth > 20 {
             return Err(ConfigError::DepthTooLarge(self.max_depth));
         }
 
